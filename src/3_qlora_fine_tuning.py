@@ -1,121 +1,160 @@
-import pandas as pd
+import os
 import torch
-import torch.nn as nn
-from datasets import Dataset
-from transformers import AutoModelForCausalLM, AutoProcessor, BitsAndBytesConfig, Qwen3VLForConditionalGeneration
-from peft import LoraConfig, get_peft_model
-from trl import DPOTrainer, DPOConfig
-from typing import Dict, Union, Any
-
-# 1. 데이터 불러오기 (가중치 포함)
-df = pd.read_csv("dpo_pairs_with_weights.csv")
-
-# 2. TRL DPOTrainer가 요구하는 기본 컬럼명으로 매핑
-# (prompt, chosen, rejected 컬럼이 필수적으로 있어야 합니다)
-# da_dpo_weight 컬럼을 weight로 매핑
-df = df.rename(columns={'da_dpo_weight': 'weight'})
-dataset = Dataset.from_pandas(df)
-
-# 학습/검증 데이터셋 분리 (예: 90% 학습, 10% 검증)
-dataset = dataset.train_test_split(test_size=0.1)
-train_dataset = dataset["train"]
-eval_dataset = dataset["test"]
-
-model_id = "Qwen/Qwen3-VL-32B-Instruct"
-
-# 4-bit 양자화 설정
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.float16,
+from datasets import load_dataset
+from transformers import (
+    AutoModelForCausalLM,
+    AutoProcessor,
+    BitsAndBytesConfig,
+    TrainingArguments
 )
+from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+from trl import DPOTrainer
+import torch.nn.functional as F
 
-# 모델 및 프로세서 로드
-model = Qwen3VLForConditionalGeneration.from_pretrained(
-    model_id, 
-    quantization_config=bnb_config, 
-    device_map="auto",  # CUDA_VISIBLE_DEVICES로 GPU 제어
-    dtype=torch.bfloat16,
-    low_cpu_mem_usage=True,  # 이 옵션을 추가하세요!
-    trust_remote_code=True
-)
-processor = AutoProcessor.from_pretrained(model_id)
+# ==========================================
+# [경로 자동 설정]
+# ==========================================
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+OUTPUT_DIR = os.path.join(PROJECT_ROOT, "output_da_dpo_model")
 
-# QLoRA 설정 (주의: 멀티모달 모델에 맞게 target_modules 지정 필요)
-lora_config = LoraConfig(
-    r=16,
-    lora_alpha=32,
-    target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-    lora_dropout=0.05,
-    bias="none",
-    task_type="CAUSAL_LM"
-)
-model = get_peft_model(model, lora_config)
+DATASET_PATH = os.path.join(DATA_DIR, "train_hc_dpo_pairs.jsonl")
 
-# 학습 설정
-training_args = DPOConfig(
-    output_dir="./results",
-    beta=0.1,
-    num_train_epochs=3,
-    per_device_train_batch_size=2,
-    per_device_eval_batch_size=2,
-    gradient_accumulation_steps=4,
-    learning_rate=5e-5,
-    weight_decay=0.01,
-    warmup_steps=100,
-    logging_steps=10,
-    save_steps=500,
-    eval_strategy="steps",
-    eval_steps=500,
-    save_total_limit=3,
-    load_best_model_at_end=True,
-    fp16=False,  # bf16 사용하므로 fp16 비활성화
-    bf16=True,   # A100 계열은 bf16이 훨씬 성능이 좋음
-    tf32=True,   # Ampere 아키텍처 가속
-    gradient_checkpointing=True,  # 메모리 절약 필수 (32B 모델)
-    dataloader_num_workers=0,     # 멀티모달 데이터로 인한 호환성 문제 방지
-    remove_unused_columns=False,  # 가중치(weight) 컬럼이 사라지지 않게 함
-)
+# ==========================================
+# [설정] 모델 및 학습 하이퍼파라미터
+# ==========================================
+MODEL_ID = "Qwen/Qwen3-VL-32B-Thinking"
 
-class DADPOTrainer(DPOTrainer):
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None, **kwargs):
+# ==========================================
+# 🛠️ 핵심 기여점: Custom DA-DPO Trainer
+# ==========================================
+class DifficultyAwareDPOTrainer(DPOTrainer):
+    """
+    일반 DPO Loss에 각 데이터 샘플의 'difficulty_weight'를 곱하여
+    난이도 기반 학습(DA-DPO)을 수행하는 커스텀 트레이너입니다.
+    """
+    def get_batch_loss_metrics(self, model, batch, train_eval="train"):
         """
-        배치 데이터(inputs)에 포함된 'weight'를 직접 꺼내서 
-        DPO Loss에 곱해주는 방식으로 수정
+        trl 라이브러리의 DPO 내부 로직을 오버라이딩하여 가중치를 적용합니다.
         """
-       # 1. 모델에 들어가면 안 되는 커스텀 인자(weight)를 미리 빼냅니다.
-        weights = inputs.pop("weight", None)
+        # 1. 기본 DPO 로직을 통해 policy와 reference의 logprob을 가져옴
+        metrics = super().get_batch_loss_metrics(model, batch, train_eval)
         
-        # 2. 부모 클래스(DPOTrainer)의 원본 compute_loss를 안전하게 호출합니다.
-        # 내부 메트릭도 함께 받아오기 위해 return_outputs=True로 강제 지정합니다.
-        outputs = super().compute_loss(
-            model, 
-            inputs, 
-            return_outputs=True, 
-            num_items_in_batch=num_items_in_batch, 
-            **kwargs
-        )
-        loss, metrics = outputs
+        # 기본 손실 함수(loss)는 튜플/딕셔너리 형태로 반환되거나 내부 변수에 저장됨.
+        # trl 버전에 따라 구현이 조금 다를 수 있으나 핵심 로직은 다음과 같습니다.
+        policy_chosen_logps = metrics.get(f"{train_eval}/policy_chosen_logps", 0)
+        policy_rejected_logps = metrics.get(f"{train_eval}/policy_rejected_logps", 0)
+        reference_chosen_logps = metrics.get(f"{train_eval}/reference_chosen_logps", 0)
+        reference_rejected_logps = metrics.get(f"{train_eval}/reference_rejected_logps", 0)
+
+        # 2. Log Ratio 계산
+        pi_logratios = policy_chosen_logps - policy_rejected_logps
+        ref_logratios = reference_chosen_logps - reference_rejected_logps
+        logits = pi_logratios - ref_logratios
         
-        # 3. 빼두었던 난이도 가중치를 로스에 적용합니다.
-        if weights is not None:
-            # 에러 방지: 가중치 텐서를 loss가 계산된 동일한 GPU로 이동시킵니다.
-            weights = weights.to(loss.device) 
-            loss = loss * weights.mean()
-            
-        # 4. 원래 사용자가 요청한 형태에 맞춰 반환합니다.
-        return (loss, metrics) if return_outputs else loss
+        # 3. 기본 DPO Loss 산출
+        base_losses = -F.logsigmoid(self.beta * logits)
+        
+        # 4. 🔥 DA-DPO 핵심: Difficulty Weight 적용 🔥
+        # 데이터 로더에서 전달된 가중치 텐서를 가져와 loss에 곱함
+        weights = batch.get("difficulty_weight", torch.ones_like(base_losses))
+        da_dpo_losses = base_losses * weights
+        
+        # 최종 Loss 평균 계산
+        loss = da_dpo_losses.mean()
+        
+        # metrics 업데이트
+        metrics[f"{train_eval}/loss"] = loss.item()
+        return loss, metrics
 
-# Trainer 실행
-trainer = DADPOTrainer(
-    model=model,
-    args=training_args,
-    train_dataset=train_dataset,
-    eval_dataset=eval_dataset,
-)
+# ==========================================
+# 메인 학습 실행 함수
+# ==========================================
+def main():
+    print(f"🔥 HC-DA-DPO 파인튜닝(Q-LoRA)을 시작합니다. 목표 모델: {MODEL_ID}")
 
-print("학습 시작...")
-trainer.train()
-print("학습 완료! 모델 저장 중...")
-trainer.save_model("qwen3-vl-da-dpo-scoring-adapter")
-print("모델 저장 완료!")
+    # 1. 4-bit 양자화 설정 (VRAM 절약의 핵심)
+    # 32B 모델을 그대로 올리면 VRAM이 터지므로, NF4 포맷으로 압축하여 로드합니다.
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_use_double_quant=True,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_compute_dtype=torch.bfloat16
+    )
+
+    print("모델과 프로세서를 로드하는 중...")
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_ID,
+        quantization_config=bnb_config,
+        device_map="auto",  # A100 8대에 자동 분산
+        trust_remote_code=True
+    )
+    
+    # Reference 모델은 학습시키지 않으므로, 동일한 4-bit 모델을 복사해서 메모리 효율화
+    ref_model = AutoModelForCausalLM.from_pretrained(
+        MODEL_ID,
+        quantization_config=bnb_config,
+        device_map="auto",
+        trust_remote_code=True
+    )
+
+    processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
+
+    # 2. 모델을 양자화 학습에 맞게 준비 (Gradient Checkpointing 등)
+    model = prepare_model_for_kbit_training(model)
+
+    # 3. LoRA 어댑터 설정 (학습할 가중치 부위 지정)
+    # VLM 특성상 Attention 모듈 전체(q, k, v, o)를 타겟으로 잡는 것이 성능이 좋습니다.
+    peft_config = LoraConfig(
+        r=64,
+        lora_alpha=128,
+        lora_dropout=0.05,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+        bias="none",
+        task_type="CAUSAL_LM",
+    )
+    model = get_peft_model(model, peft_config)
+    model.print_trainable_parameters()
+
+    # 4. 데이터셋 로드
+    dataset = load_dataset("json", data_files=DATASET_PATH, split="train")
+    
+    # 5. Training Arguments (A100 8대 환경 최적화)
+    training_args = TrainingArguments(
+        output_dir=OUTPUT_DIR,
+        per_device_train_batch_size=2,   # VRAM에 맞춰 조절
+        gradient_accumulation_steps=8,   # Batch Size 뻥튀기
+        learning_rate=5e-6,              # DPO는 LR을 매우 낮게 잡아야 함
+        lr_scheduler_type="cosine",
+        num_train_epochs=2,
+        save_strategy="epoch",
+        logging_steps=10,
+        optim="paged_adamw_32bit",
+        bf16=True,                       # A100이므로 bfloat16 필수
+        remove_unused_columns=False,     # 중요! difficulty_weight 컬럼 삭제 방지
+        gradient_checkpointing=True,
+        report_to="tensorboard"
+    )
+
+    # 6. 트레이너 초기화 및 학습 시작
+    trainer = DifficultyAwareDPOTrainer(
+        model=model,
+        ref_model=ref_model,
+        args=training_args,
+        beta=0.1,  # KL divergence 패널티 강도 (논문 실험 시 0.1 ~ 0.5 사이 조절)
+        train_dataset=dataset,
+        tokenizer=processor, # trl의 최근 버전은 processor를 직접 넘기기도 합니다.
+        peft_config=peft_config,
+    )
+
+    print("🚀 본격적인 DA-DPO 학습 루프 진입!")
+    trainer.train()
+    
+    # 7. 학습 완료 후 어댑터(LoRA Weight) 저장
+    trainer.model.save_pretrained(os.path.join(OUTPUT_DIR, "final_adapter"))
+    processor.save_pretrained(os.path.join(OUTPUT_DIR, "final_adapter"))
+    print("🎉 학습 완료! LoRA 어댑터가 output 폴더에 저장되었습니다.")
+
+if __name__ == "__main__":
+    main()
