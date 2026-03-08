@@ -1,0 +1,59 @@
+# Python
+*.py[cod]
+*$py.class
+*.so
+__pycache__/
+*.egg-info/
+dist/
+build/
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Environment variables
+.env
+.env.local
+
+# Data files
+data/*.jsonl
+data/images/
+
+# Results and outputs
+results/
+outputs/
+checkpoints/
+logs/
+wandb/
+
+# Model files
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.h5
+
+# Cache
+.cache/
+*.log
+
+# Temporary files
+*.tmp
+tmp/
+temp/
