@@ -4,7 +4,12 @@ import torch
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from transformers import AutoProcessor, AutoModel
+from transformers import AutoProcessor, AutoModel# ==========================================
+# [GPU 할당 제한] 
+# A100 80GB 2대(0번, 1번)만 사용하여 VRAM을 여유롭게 잡고 통신 병목을 없앱니다.
+# 반드시 다른 torch 라이브러리가 초기화되기 전, 스크립트 최상단에 선언해야 합니다.
+# ==========================================
+os.environ["CUDA_VISIBLE_DEVICES"] = "6,7"  # A100 80GB 2대만 사용
 
 # ==========================================
 # [경로 자동 설정]
