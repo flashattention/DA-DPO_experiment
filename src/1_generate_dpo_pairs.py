@@ -1,21 +1,34 @@
 import os
 import json
 import asyncio
+import shutil
 import pandas as pd
+from datetime import datetime
 from sklearn.model_selection import train_test_split
 from openai import AsyncOpenAI
 from tqdm.asyncio import tqdm_asyncio
 
 # ==========================================
-# [경로 자동 설정] 스크립트 위치 기반으로 완벽한 경로 추적
+# [경로 및 버전 자동 설정] 
 # ==========================================
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))       # 현재 스크립트(src) 폴더 경로
-PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)                    # 최상위(DA-DPO_EXPERIMENT) 폴더 경로
-DATA_DIR = os.path.join(PROJECT_ROOT, "data")                 # data 폴더 경로
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))       
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)                    
+DATA_DIR = os.path.join(PROJECT_ROOT, "data")                 
+
+os.makedirs(DATA_DIR, exist_ok=True)
+
+# 🌟 [버전 관리] 현재 시간을 바탕으로 고유한 타임스탬프 생성
+TIMESTAMP = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 INPUT_FILE_PATH = os.path.join(DATA_DIR, "merged_eval_data.jsonl")
-TRAIN_OUTPUT_PATH = os.path.join(DATA_DIR, "train_dpo_pairs.jsonl")
-TEST_OUTPUT_PATH = os.path.join(DATA_DIR, "test_data_for_eval.jsonl")
+
+# 영구 보존용 타임스탬프 파일 경로
+TRAIN_OUTPUT_VERSIONED = os.path.join(DATA_DIR, f"train_dpo_pairs_{TIMESTAMP}.jsonl")
+TEST_OUTPUT_VERSIONED = os.path.join(DATA_DIR, f"test_data_for_eval_{TIMESTAMP}.jsonl")
+
+# 파이프라인 연동용 최신(latest) 파일 경로
+TRAIN_OUTPUT_LATEST = os.path.join(DATA_DIR, "train_dpo_pairs_latest.jsonl")
+TEST_OUTPUT_LATEST = os.path.join(DATA_DIR, "test_data_for_eval_latest.jsonl")
 
 # ==========================================
 # [설정] 로컬 vLLM 서버 세팅 (A100 8대 환경)
@@ -25,7 +38,6 @@ client = AsyncOpenAI(
     base_url="http://localhost:8000/v1"
 )
 
-# vLLM 서버 구동 시 사용한 모델 이름
 GHOSTWRITER_MODEL = "Qwen/Qwen3-VL-235B-A22B-Thinking" 
 
 MAX_CONCURRENT_REQUESTS = 50 
@@ -50,15 +62,18 @@ df = pd.DataFrame(raw_data)
 
 # 데이터 누수 방지를 위해 '이미지' 기준으로 90:10 분리
 df['image_path'] = df['metadata'].apply(lambda x: x['image_path'])
-unique_images = df['image_path'].unique().tolist()  # pyarrow 호환성을 위해 리스트로 변환
+unique_images = df['image_path'].unique().tolist()
 train_images, test_images = train_test_split(unique_images, test_size=0.1, random_state=42)
 
 train_df = df[df['image_path'].isin(train_images)].copy()
 test_df = df[df['image_path'].isin(test_images)].copy()
 
-# Test 데이터 보관
-test_df.to_json(TEST_OUTPUT_PATH, orient="records", lines=True, force_ascii=False)
-print(f"✅ Test 데이터 격리 완료 및 저장됨 (총 {len(test_df)}건) -> {TEST_OUTPUT_PATH}")
+# Test 데이터 보관 (버전 기록 + 최신본 덮어쓰기)
+test_df.to_json(TEST_OUTPUT_VERSIONED, orient="records", lines=True, force_ascii=False)
+shutil.copy2(TEST_OUTPUT_VERSIONED, TEST_OUTPUT_LATEST)
+print(f"✅ Test 데이터 격리 완료 (총 {len(test_df)}건)")
+print(f"   -> 보존용: {TEST_OUTPUT_VERSIONED}")
+print(f"   -> 연동용: {TEST_OUTPUT_LATEST}")
 
 # ==========================================
 # 2. Qwen3-235B를 이용한 Chosen <think> 대필 (비동기)
@@ -160,8 +175,13 @@ if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     final_dpo_data = loop.run_until_complete(process_dpo_pairs(train_df))
     
-    with open(TRAIN_OUTPUT_PATH, "w", encoding="utf-8") as f:
+    # 🌟 [버전 관리] 생성된 데이터를 타임스탬프 버전과 Latest 버전에 동시 저장
+    with open(TRAIN_OUTPUT_VERSIONED, "w", encoding="utf-8") as f:
         for item in final_dpo_data:
             f.write(json.dumps(item, ensure_ascii=False) + "\n")
             
-    print(f"🎉 완벽한 DPO 데이터셋 저장 완료! ({TRAIN_OUTPUT_PATH}, 총 {len(final_dpo_data)} Pairs 생성됨)")
+    shutil.copy2(TRAIN_OUTPUT_VERSIONED, TRAIN_OUTPUT_LATEST)
+            
+    print(f"🎉 완벽한 DPO 데이터셋 저장 완료! (총 {len(final_dpo_data)} Pairs 생성됨)")
+    print(f"   -> 보존용 영구 기록: {TRAIN_OUTPUT_VERSIONED}")
+    print(f"   -> 다음 스크립트 연동용: {TRAIN_OUTPUT_LATEST}")
