@@ -13,8 +13,14 @@ $$M = \frac{1}{|y_w|} \sum_{t=1}^{|y_w|} \log \pi_{\text{ref}}(y_w^t | x, y_w^{<
 * $M < 0$: 모델이 오답을 더 그럴싸하게 여기는 어려운(환각) 문제.
 
 ### 1.2. Human Calibration Penalty ($H$)
-인간 평가자와 기존 모델 간의 의견 불일치 정도를 수치화하여 난이도에 반영합니다.
+인간 평가자와 기존 모델 간의 다차원적 의견 불일치 정도를 수치화한 페널티 항입니다.
 $$H = 1.0 - \text{overall\_match\_rate}$$
+
+이때 `overall_match_rate`는 서로 다른 척도를 가진 8개의 평가 항목을 0.0~1.0 사이의 부분 일치도(Partial Score)로 정규화하여 산술 평균한 종합 지표입니다. 단순 이진 판별을 넘어, 오차 거리에 비례한 연속적 패널티를 부여합니다.
+* **범주형 (Yes/No):** 일치 시 $1.0$, 불일치 시 $0.0$ (항목: c, d, g)
+* **정량적 척도 (1~5점):** $1.0 - \frac{|\text{diff}|}{4.0}$ (항목: a1, a2, e_cultural_specificity)
+* **난이도 척도 (1~3점):** $1.0 - \frac{|\text{diff}|}{2.0}$ (항목: e_human_difficulty)
+* **문자열 유사도:** `difflib.SequenceMatcher` 기반 텍스트 유사도 $0.0 \sim 1.0$ (항목: a3)
 
 ### 1.3. Difficulty Weight ($\omega$)
 모델이 헷갈려 할수록($M$ 감소), 인간과 의견이 다를수록($H$ 증가) 가중치가 커지도록 시그모이드 함수를 적용합니다. ($\alpha$, $\beta$는 하이퍼파라미터)

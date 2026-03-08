@@ -50,7 +50,7 @@ df = pd.DataFrame(raw_data)
 
 # 데이터 누수 방지를 위해 '이미지' 기준으로 90:10 분리
 df['image_path'] = df['metadata'].apply(lambda x: x['image_path'])
-unique_images = df['image_path'].unique()
+unique_images = df['image_path'].unique().tolist()  # pyarrow 호환성을 위해 리스트로 변환
 train_images, test_images = train_test_split(unique_images, test_size=0.1, random_state=42)
 
 train_df = df[df['image_path'].isin(train_images)].copy()
