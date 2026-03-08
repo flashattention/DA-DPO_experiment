@@ -4,7 +4,7 @@ import torch
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from transformers import AutoProcessor, AutoModelForCausalLM
+from transformers import AutoProcessor, AutoModel
 
 # ==========================================
 # [경로 자동 설정]
@@ -86,10 +86,10 @@ def main():
     
     # A100 8대 환경이므로 device_map="auto"로 여러 GPU에 분산 적재
     processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(
+    model = AutoModel.from_pretrained(
         MODEL_ID, 
         device_map="auto", 
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         trust_remote_code=True
     )
     model.eval()

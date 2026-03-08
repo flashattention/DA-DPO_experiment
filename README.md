@@ -45,22 +45,44 @@ $$L_{\text{DA-DPO}} = -\omega \cdot \log \sigma (\beta \cdot (M_{\text{policy}} 
 본 프로젝트는 총 5개의 독립된 스크립트로 구성되며, 데이터 생성부터 논문 시각화까지 End-to-End로 동작합니다.
 
 ### 🔹 Script 1: Data Generation & Split (`1_generate_dpo_pairs.py`)
-* **역할:** 초거대 235B VLM(vLLM 서버)을 활용하여 인간 평가 결과(JSON)를 기반으로 완벽한 `<think>` (추론 과정) 텍스트를 대필합니다.
-* **특징:** 데이터 누수(Data Leakage)를 원천 차단하기 위해 **이미지 ID를 기준으로 90:10 비율의 Train/Test Split**을 수행합니다.
+* **핵심 역할:** 압도적인 지능을 가진 초거대 교사 모델(235B)을 이용해, 모델 학습에 쓸 고품질의 '정답(Chosen) 및 오답(Rejected) 추론 과정(`<think>`)'을 만들어내는 데이터 증강 단계입니다.
+* **작동 원리:**
+  * 준비된 인간 평가 데이터(`merged_eval_data.jsonl`)를 로드합니다.
+  * 235B vLLM 서버에 비동기(Async) API를 호출하여, 인간이 내린 평가를 바탕으로 "왜 이것이 문화적으로 맞고/틀린지" 논리적으로 설명하는 텍스트를 대필받습니다.
+  * **[데이터 누수 방지]** 동일한 이미지가 Train과 Test에 동시에 들어가지 않도록 **Image ID 기준으로 90%의 학습 데이터와 10%의 평가 데이터로 엄격하게 분리(Split)**합니다.
+* **출력물:** `train_dpo_dataset.json`, `test_dpo_dataset.json`
 
 ### 🔹 Script 2: Difficulty Weight Calculation (`2_calc_logprob.py`)
-* **역할:** Target Model(32B)을 로드하여 Qwen-VL의 공식 ChatML 템플릿(특수 토큰)을 엄격하게 적용한 뒤, 각 DPO Pair의 Token-level Logprob을 추출합니다.
-* **특징:** 위 수식에 따라 $M, H, \omega$를 계산하고, 훈련 데이터에 `difficulty_weight` 피처(Feature)를 삽입합니다.
+* **핵심 역할:** 1번에서 만든 데이터를 타겟 모델(32B)에게 보여주고 내재적 난이도를 수학적으로 채점하는 단계입니다.
+* **작동 원리:**
+  * 32B 베이스 모델을 Hugging Face로 로드하여 공식 ChatML 템플릿을 적용합니다.
+  * 정답과 오답 텍스트에 대한 Token-level Logprob을 추출하여 **내재적 확신도 오차($M$)**를 계산합니다.
+  * 인간 체감 오차율($H$, Overall Match Rate)과 $M$을 결합하여, 이 문제의 최종 **난이도 가중치($\omega$)**를 0~1 사이 값으로 산출합니다.
+* **출력물:** `train_dpo_with_weights.json` (가중치 $\omega$가 포함된 최종 학습 데이터)
 
 ### 🔹 Script 3: Q-LoRA Fine-Tuning (`3_qlora_fine_tuning.py`)
-* **역할:** 4-bit 양자화된 32B 모델을 8대의 A100 GPU에 분산 적재(`DeepSpeed`/`Accelerate`)하여 파인튜닝을 수행합니다.
-* **특징:** `trl` 라이브러리의 `DPOTrainer`를 오버라이딩하여, 샘플별 가중치($\omega$)가 Loss에 직접 곱해지도록 커스텀 학습 루프를 구현했습니다.
+* **핵심 역할:** 산출된 난이도 가중치($\omega$)를 적용하여, 32B 모델의 가중치를 실제로 업데이트하는 커스텀 분산 학습 단계입니다.
+* **작동 원리:**
+  * 4-bit 양자화된 32B 모델을 8대의 A100 GPU에 분산 적재(`DeepSpeed`/`Accelerate`)합니다.
+  * `trl` 라이브러리의 표준 `DPOTrainer`를 오버라이딩합니다.
+  * 난이도 가중치($\omega$)가 높은(어려운) 문제일수록 Loss(벌점)에 직접 곱해지도록 하여, **모델이 혼동하기 쉬운 문화적 맥락에 학습 역량을 집중**하게 만듭니다.
+* **출력물:** `output_da_dpo_model/` (새롭게 학습된 LoRA 어댑터 가중치)
 
 ### 🔹 Script 4: Evaluation & Inference (`4_evaluate_and_benchmark.py`)
-* **역할:** 분리해둔 10%의 Test Set에 대해 학습된 LoRA 어댑터를 씌운 모델로 추론을 진행하여, 생성된 JSON 평가를 바탕으로 Baseline 모델과 성능을 비교 채점합니다.
+* **핵심 역할:** 개조된 32B 모델이 얼마나 똑똑해졌는지, 격리해두었던 10%의 Test Set으로 검증 및 벤치마크 평가를 수행하는 단계입니다.
+* **작동 원리:**
+  * 학습된 LoRA 어댑터를 32B 베이스 모델에 씌웁니다.
+  * 10%의 Test Set 이미지를 입력하여 새로운 답변을 직접 생성하게 합니다.
+  * 생성된 답변을 바탕으로 Baseline 모델과 비교하여 얼마나 정답에 가깝게 맞춰졌는지(Alignment) 객관적인 수치로 채점합니다.
+* **출력물:** `evaluation_results.csv` (문항별 예측 결과 및 채점 데이터)
 
 ### 🔹 Script 5: Visualization for Publication (`5_visualize_metrics.py`)
-* **역할:** 4번의 결과를 분석하여 논문 게재용 고해상도(300 DPI) PDF 그래프를 자동 생성합니다. (전체 일치율, 난이도별 성능 방어율, 오차 밀도 함수 등)
+* **핵심 역할:** 평가 결과를 분석하여, 제안 방법론(HC-DA-DPO)의 우수성을 입증하는 논문 게재용 고해상도 그래프를 자동 생성하는 단계입니다.
+* **작동 원리:**
+  * GPU 없이 Pandas와 Matplotlib를 사용하여 CSV 결과 파일을 분석합니다.
+  * 난이도(Difficulty) 구간별 성능 방어율, 오차 밀도 함수 등을 계산합니다.
+  * "문제가 어려워질수록 Baseline은 성능이 급락하지만, 제안 모델은 강건하게 방어한다"는 핵심 주장을 시각화합니다.
+* **출력물:** `figures/` 폴더 내 고해상도(300 DPI) `.pdf` 그래프 파일들
 
 ---
 
