@@ -3,13 +3,13 @@ import torch
 import argparse
 from datasets import load_dataset
 from transformers import (
-    AutoModelForCausalLM, 
+    AutoModelForVision2Seq, 
     AutoProcessor, 
     BitsAndBytesConfig, 
     TrainingArguments
 )
 from peft import LoraConfig, prepare_model_for_kbit_training, get_peft_model
-from trl import DPOTrainer
+from trl import DPOConfig, DPOTrainer
 
 # ==========================================
 # [경로 설정]
@@ -58,9 +58,11 @@ def main():
         bnb_4bit_quant_type="nf4",
         bnb_4bit_compute_dtype=torch.bfloat16
     )
+    
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
 
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_ID, quantization_config=bnb_config, device_map="auto", trust_remote_code=True
+    model = AutoModelForVision2Seq.from_pretrained(
+        MODEL_ID, quantization_config=bnb_config, device_map={"": local_rank}, trust_remote_code=True
     )
     model = prepare_model_for_kbit_training(model)
 
@@ -75,8 +77,8 @@ def main():
     )
     model = get_peft_model(model, peft_config)
 
-    # 5. TrainingArguments
-    training_args = TrainingArguments(
+    # 5. DPO 설정
+    training_args = DPOConfig(
         output_dir=output_path,
         per_device_train_batch_size=2,   
         gradient_accumulation_steps=8,
@@ -89,6 +91,9 @@ def main():
         bf16=True,
         gradient_checkpointing=True,     
         remove_unused_columns=False,
+        beta=0.1,
+        max_prompt_length=1024,
+        max_length=2048,
         report_to="wandb",                  # 🌟 W&B 로깅 켜기
         run_name=args.run_name              # 🌟 W&B에 표시될 실험 이름
     )
@@ -100,11 +105,8 @@ def main():
         model=model,
         args=training_args,
         train_dataset=dataset,
-        tokenizer=processor.tokenizer,
+        processing_class=processor,
         peft_config=peft_config,
-        beta=0.1, 
-        max_prompt_length=1024,
-        max_length=2048
     )
 
     trainer.train()
