@@ -3,7 +3,7 @@ import torch
 import argparse
 from datasets import load_dataset
 from transformers import (
-    AutoModelForVision2Seq, 
+    AutoModelForImageTextToText, 
     AutoProcessor, 
     BitsAndBytesConfig, 
     TrainingArguments
@@ -61,7 +61,7 @@ def main():
     
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
 
-    model = AutoModelForVision2Seq.from_pretrained(
+    model = AutoModelForImageTextToText.from_pretrained(
         MODEL_ID, quantization_config=bnb_config, device_map={"": local_rank}, trust_remote_code=True
     )
     model = prepare_model_for_kbit_training(model)
@@ -75,7 +75,6 @@ def main():
         bias="none",
         task_type="CAUSAL_LM"
     )
-    model = get_peft_model(model, peft_config)
 
     # 5. DPO 설정
     training_args = DPOConfig(
@@ -91,8 +90,8 @@ def main():
         bf16=True,
         gradient_checkpointing=True,     
         remove_unused_columns=False,
+        ddp_find_unused_parameters=False,   # DDP 성능 최적화
         beta=0.1,
-        max_prompt_length=1024,
         max_length=2048,
         report_to="wandb",                  # 🌟 W&B 로깅 켜기
         run_name=args.run_name              # 🌟 W&B에 표시될 실험 이름
