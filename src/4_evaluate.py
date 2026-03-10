@@ -8,7 +8,8 @@ import pandas as pd
 from tqdm import tqdm
 from PIL import Image
 from difflib import SequenceMatcher
-from transformers import AutoProcessor, AutoModelForCausalLM
+# 🌟 최신 버전에 맞춰 AutoModelForImageTextToText 사용
+from transformers import AutoProcessor, AutoModelForImageTextToText
 from peft import PeftModel
 
 # ==========================================
@@ -17,12 +18,11 @@ from peft import PeftModel
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 
-# 🌟 1번 스크립트에서 격리해둔 최신 Test 데이터
 TEST_DATA_PATH = os.path.join(PROJECT_ROOT, "data", "test_data_for_eval_latest.jsonl")
 MODEL_ID = "Qwen/Qwen3-VL-32B-Thinking"
 
 # ==========================================
-# [유틸리티 & 파싱 함수 (원본 100% 복원)]
+# [유틸리티 & 파싱 함수 (원본 유지)]
 # ==========================================
 def get_val(val):
     return None if pd.isna(val) else val
@@ -32,7 +32,6 @@ def difficulty_to_int(diff_str):
     return mapping.get(str(diff_str).lower(), 2)
 
 def safe_parse_json(text):
-    """VLM이 뱉은 텍스트에서 찌꺼기를 제거하고 안전하게 JSON만 추출합니다."""
     def _extract_balanced_object(s: str):
         start = s.find('{')
         if start == -1: return None
@@ -88,7 +87,6 @@ def safe_parse_json(text):
     return {"error": "JSON Parsing Failed", "raw": text[:200]}
 
 def calculate_similarity(human, vlm):
-    """인간 평가와 VLM 평가 간의 차이/유사도를 계산합니다."""
     sim = {}
     sim['e_cultural_specificity_diff'] = int(vlm.get('e_cultural_specificity', 0)) - int(human.get('e_cultural_specificity', 0))
     sim['a1_keyword_cultural_diff'] = int(vlm.get('a1_keyword_cultural', 0)) - int(human.get('a1_keyword_cultural', 0))
@@ -137,43 +135,37 @@ def build_detailed_prompt(metadata):
     rationale_val = get_val(metadata.get('rationale_ko'))
     rationale_text = f"\n- 정답 해설(Rationale): {rationale_val}" if pd.notna(rationale_val) else ""
 
-    system_prompt = """당신은 한국 문화가 포함된 VQA(시각적 질의응답) 데이터셋의 품질을 평가하는 테스트 모드 검수자입니다.
-주어진 이미지와 메타데이터(키워드, 질문, 정답 등)를 간단히 분석하여 기본 9가지 항목을 평가하세요.
+    thought_instruction = """
+        [중요: 추론 과정 기록]
+        평가를 시작하기 전에, 반드시 <think> 태그 내에서 당신의 상세한 추론 과정을 단계별로 기록하세요:
+        1. 이미지 관찰: 이미지에서 보이는 주요 요소들 (객체, 색상, 텍스트, 구도 등)
+        2. 키워드 분석: 키워드가 이미지와 어떻게 연결되는지
+        3. 질문-답변 검증: 질문이 이미지와 관련이 있는지, 답변이 정확한지
+        4. 문화적 특수성 판단: 각 e_cultural_specificity 점수 레벨(1~5점)을 고려하며, 왜 특정 점수를 선택했는지 구체적으로 설명
+        5. 난이도 평가: 사람이 이 문제를 풀 때의 어려움
+        6. 최종 판단: 각 항목에 대한 최종 점수와 그 근거
 
-[중요: 추론 과정 기록]
-평가를 시작하기 전에, 반드시 <think> 태그 내에서 당신의 상세한 추론 과정을 단계별로 기록하세요:
-1. 이미지 관찰: 이미지에서 보이는 주요 요소들
-2. 키워드 분석: 키워드가 이미지와 어떻게 연결되는지
-3. 질문-답변 검증: 질문이 이미지와 관련이 있는지, 답변이 정확한지
-4. 문화적 특수성 판단: 각 e_cultural_specificity 점수 레벨(1~5점)을 고려하며, 왜 특정 점수를 선택했는지 구체적으로 설명
-5. 난이도 평가: 사람이 이 문제를 풀 때의 어려움
-6. 최종 판단: 각 항목에 대한 최종 점수와 그 근거
-
-예시 형식:
-<think>
-[이미지 관찰] 이미지에는 ... 이 보입니다.
-[키워드 분석] 키워드 '...'는 ...을 의미하며, 이미지의 ...와 일치합니다.
-[문화적 특수성] 이 질문은 ...하기 때문에 e_cultural_specificity는 X점입니다. 왜냐하면 ...
-</think>
+        예시 형식:
+        <think>
+        [이미지 관찰] 이미지에는 ... 이 보입니다.
+        [키워드 분석] 키워드 '...'는 ...을 의미하며, 이미지의 ...와 일치합니다.
+        [문화적 특수성] 이 질문은 ...하기 때문에 e_cultural_specificity는 X점입니다. 왜냐하면 ...
+        </think>"""
+    
+    system_prompt = f"""당신은 한국 문화가 포함된 VQA(시각적 질의응답) 데이터셋의 품질을 평가하는 테스트 모드 검수자입니다.
+주어진 이미지와 메타데이터(키워드, 질문, 정답 등)를 간단히 분석하여 기본 9가지 항목을 평가하세요.{thought_instruction}
 
 [평가 기준]
 - a1_keyword_cultural: 키워드가 한국 문화를 얼마나 잘 대표하는가? (1~5 정수)
 - a2_image_keyword_alignment: 이미지가 키워드와 관련이 있는가? (1~5 정수)
-- a3_keyword_english: 한국어 키워드의 영어 번역 (문자열)
-- c_question_image_relevance: 질문 관련성 ("yes" 또는 "no")
-- d_answer_accuracy: 정답 정확성 ("correct", "incorrect" 또는 "ambiguous")
-- d_answer_accuracy_text: 오답일 경우 이유
-- e_cultural_specificity: 정답을 맞추기 위해 한국 문화/역사/제도 사전지식이 얼마나 필수적인가? (1~5 정수)
-- e_human_difficulty: 난이도 ("easy", "medium", "hard")
-- g_text_required: 텍스트 읽기 필수 여부 ("yes" 또는 "no")
+- a3_keyword_english: 한국어 키워드를 영미권에서 지칭하는 가장 적절한 영어 단어/구문 (문자열)
+- c_question_image_relevance: 질문이 이미지와 관련이 있는지 여부 ("yes" 또는 "no")
+- d_answer_accuracy: 제공된 정답이 이미지와 질문에 비추어 볼 때 정확한지 여부 ("correct", "incorrect" 또는 "ambiguous")
+- d_answer_accuracy_text: 만약 d_answer_accuracy가 "no" 또는 "ambiguous"라면 그 이유를 짧게 설명 (정확하다면 null)
+- e_cultural_specificity: 정답을 맞추기 위해 한국 문화/역사/제도에 대한 사전지식이 얼마나 필수적인가? (1~5 정수)
+- e_human_difficulty: 이 질문에 답하기 얼마나 어려운가? ("easy", "medium", "hard")
+- g_text_required: 이미지에 있는 텍스트를 읽어야만 문제를 풀 수 있는가? ("yes" 또는 "no")
 - thought_trace: 반드시 포함. <think>...</think> 형식 문자열
-
-⚠️ 중요: e_cultural_specificity 점수 정의
-[1점] 이미지와 질문만으로 올바른 답변 도출 가능 (외국인도 가능)
-[2점] 지식이 있으면 도움되나, 없어도 어느정도 풀 수 있음
-[3점] 지식이 큰 도움이 되고, 없으면 추론 난이도 높음
-[4점] 사전지식이 거의 필수
-[5점] 사전지식 없이는 절대 풀 수 없음
 
 반드시 JSON 형식으로만 답변을 출력하세요. 
 ⚠️ 중요: e_cultural_specificity 점수 정의 (한국 문화 사전지식의 필수 수준)
@@ -221,29 +213,51 @@ def build_detailed_prompt(metadata):
     
     return system_prompt, user_prompt
 
+def resolve_image_path(image_path: str):
+    """이미지 경로를 여러 후보에서 안전하게 해석합니다."""
+    if not image_path:
+        return None
+
+    if os.path.isabs(image_path):
+        return image_path if os.path.exists(image_path) else None
+
+    rel_path = image_path.lstrip("./")
+    candidates = [
+        os.path.join(PROJECT_ROOT, rel_path),
+        os.path.join(PROJECT_ROOT, "data", rel_path),
+    ]
+
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+
+    return None
+
 # ==========================================
-# [모델 추론 실행기]
+# [모델 분산 추론 실행기]
 # ==========================================
-def generate_responses(model, processor, dataset, model_name, prompt_mode):
-    """
-    prompt_mode: "Simple" 또는 "Detailed"
-    """
+def generate_responses(model, processor, dataset, model_name, prompt_mode, device, rank):
     results = []
-    print(f"\n🧠 [{model_name} | {prompt_mode} Prompt] 추론 시작...")
+    print(f"\n🧠 [GPU {rank} | {model_name} | {prompt_mode}] 할당된 {len(dataset)}개 데이터 추론 시작...")
     
-    for item in tqdm(dataset, desc=f"{model_name}-{prompt_mode}"):
+    missing_images = 0
+    
+    for item in tqdm(dataset, desc=f"GPU-{rank} {model_name}-{prompt_mode}"):
         metadata = item.get('metadata', {})
         human_eval = item.get('human_eval', {})
-        image_path = metadata.get('image_path')
-        full_image_path = os.path.join(PROJECT_ROOT, image_path)
+        image_path = metadata.get('image_path', '')
         
-        if not os.path.exists(full_image_path):
+        full_image_path = resolve_image_path(image_path)
+
+        if not full_image_path:
+            if missing_images < 3: # 화면 도배 방지용 첫 3개만 경고 출력
+                print(f"\n⚠️ [GPU {rank}] 이미지 없음: {image_path}")
+            missing_images += 1
             continue
             
         raw_image = Image.open(full_image_path).convert("RGB")
         file_uri = f"file://{full_image_path}"
         
-        # 프롬프트 모드에 따른 메시지 조립
         if prompt_mode == "Simple":
             prompt_text = build_simple_prompt(metadata)
             messages = [{"role": "user", "content": [{"type": "image", "image": file_uri}, {"type": "text", "text": prompt_text}]}]
@@ -257,7 +271,7 @@ def generate_responses(model, processor, dataset, model_name, prompt_mode):
             max_tokens = 2048
 
         text_input = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = processor(text=[text_input], images=[raw_image], return_tensors="pt", padding=True).to(model.device)
+        inputs = processor(text=[text_input], images=[raw_image], return_tensors="pt", padding=True).to(device)
         
         with torch.no_grad():
             generated_ids = model.generate(**inputs, max_new_tokens=max_tokens, temperature=0.1)
@@ -265,7 +279,6 @@ def generate_responses(model, processor, dataset, model_name, prompt_mode):
         generated_ids_trimmed = [out_ids[len(in_ids):] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)]
         response_text = processor.batch_decode(generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
         
-        # 결과 저장 로직 분기
         row_result = {"image_id": image_path}
         
         if prompt_mode == "Simple":
@@ -280,29 +293,44 @@ def generate_responses(model, processor, dataset, model_name, prompt_mode):
             row_result[f"{model_name}_Detailed_overall_match"] = eval_sim.get("overall_match_rate", "N/A")
             
         results.append(row_result)
+
+    if missing_images > 0:
+        print(f"\n🚨 [GPU {rank}] 총 {missing_images}개의 이미지를 찾지 못해 스킵되었습니다. (경로 확인 필수!)")
+        
+    # 🌟 에러 방어: 이미지를 다 못 찾아서 results가 비어있어도 필수 컬럼이 있는 DF 반환
+    if not results:
+        return pd.DataFrame(columns=["image_id"])
         
     return pd.DataFrame(results)
 
 def main():
-    parser = argparse.ArgumentParser(description="Evaluate Ablation Models (8-way)")
-    parser.add_argument("--exp_dir", type=str, required=True, help="평가할 모델이 있는 실험 폴더 경로 (예: runs/exp_2026...)")
+    parser = argparse.ArgumentParser(description="Evaluate Ablation Models (8-way Multi-GPU)")
+    parser.add_argument("--exp_dir", type=str, required=True, help="실험 폴더 경로 (예: runs/exp_2026...)")
+    parser.add_argument("--rank", type=int, default=0, help="현재 GPU 번호")
+    parser.add_argument("--world_size", type=int, default=1, help="총 GPU 대수")
     args = parser.parse_args()
+    
+    device = "cuda:0" 
     
     EXP_DIR = os.path.join(PROJECT_ROOT, args.exp_dir)
     EVAL_OUTPUT_DIR = os.path.join(EXP_DIR, "eval")
     os.makedirs(EVAL_OUTPUT_DIR, exist_ok=True)
     
-    OUTPUT_CSV_PATH = os.path.join(EVAL_OUTPUT_DIR, "evaluation_results_8way.csv")
-    print(f"\n🚀 [8-way Ablation 평가 시작] 대상 실험 폴더: {EXP_DIR}")
+    TEMP_CSV_PATH = os.path.join(EVAL_OUTPUT_DIR, f"temp_res_gpu_{args.rank}.csv")
+    print(f"\n🚀 [GPU {args.rank}] 평가 시작 | 대상 폴더: {EXP_DIR}")
 
-    test_dataset = []
+    full_dataset = []
     with open(TEST_DATA_PATH, 'r', encoding='utf-8') as f:
         for line in f:
-            test_dataset.append(json.loads(line))
+            full_dataset.append(json.loads(line))
             
-    # 정답(Ground Truth) 베이스 데이터프레임 구성
+    chunk_size = len(full_dataset) // args.world_size
+    start_idx = args.rank * chunk_size
+    end_idx = start_idx + chunk_size if args.rank != args.world_size - 1 else len(full_dataset)
+    test_dataset = full_dataset[start_idx:end_idx]
+    
     final_df = pd.DataFrame([{
-        "image_id": item['metadata']['image_path'], 
+        "image_id": item['metadata'].get('image_path', ''), 
         "keyword": item['metadata'].get('keyword', ''),
         "ground_truth_answer": item['metadata'].get('answer', ''),
         "ground_truth_e_cultural": item.get('human_eval', {}).get('e_cultural_specificity', '')
@@ -310,54 +338,76 @@ def main():
 
     MODELS_TO_EVALUATE = {
         "Baseline": None,
-        "Standard_DPO": os.path.join(EXP_DIR, "output_dpo_model"),
-        "DA_DPO": os.path.join(EXP_DIR, "output_da_dpo_model"),
-        "HC_DA_DPO": os.path.join(EXP_DIR, "output_hc_da_dpo_model")
+        "Standard_DPO": [
+            os.path.join(EXP_DIR, "output_dpo_model"),
+            os.path.join(PROJECT_ROOT, "output_dpo_model")
+        ],
+        "DA_DPO": [
+            os.path.join(EXP_DIR, "output_da_dpo_model"),
+            os.path.join(PROJECT_ROOT, "output_da_dpo_model")
+        ],
+        "HC_DA_DPO": [
+            os.path.join(EXP_DIR, "output_hc_da_dpo_model"),
+            os.path.join(PROJECT_ROOT, "output_hc_da_dpo_model")
+        ]
     }
 
     PROMPT_MODES = ["Simple", "Detailed"]
 
-    # 4개 모델 x 2개 프롬프트 = 총 8가지 경우의 수 순차 진행
-    for model_name, adapter_path in MODELS_TO_EVALUATE.items():
-        print(f"\n=============================================")
-        print(f"⏳ 로딩 중... 모델: {model_name}")
-        
-        if adapter_path and not os.path.exists(adapter_path):
-            print(f"⚠️ [스킵] 어댑터 폴더가 없습니다: {adapter_path}")
-            continue
+    print(f"\n[GPU {args.rank}] ⏳ 프로세서와 베이스 모델(32B)을 최초 1회 로드합니다...")
+    processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
+    
+    # 🌟 최신 버전에 맞춰 변경
+    base_model = AutoModelForImageTextToText.from_pretrained(
+        MODEL_ID, device_map=device, dtype=torch.bfloat16, trust_remote_code=True
+    )
 
-        processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
-        base_model = AutoModelForCausalLM.from_pretrained(
-            MODEL_ID, device_map="auto", torch_dtype=torch.bfloat16, trust_remote_code=True
-        )
-        
-        if adapter_path:
-            model = PeftModel.from_pretrained(base_model, adapter_path)
+    for model_name, adapter_paths in MODELS_TO_EVALUATE.items():
+        print(f"\n=============================================")
+
+        adapter_path = None
+        if isinstance(adapter_paths, list):
+            adapter_path = next((p for p in adapter_paths if os.path.exists(p)), None)
+            if adapter_path is None:
+                print(f"⚠️ [GPU {args.rank}] 어댑터 폴더가 없습니다: {adapter_paths[0]}")
+                continue
+        elif adapter_paths and not os.path.exists(adapter_paths):
+            print(f"⚠️ [GPU {args.rank}] 어댑터 폴더가 없습니다: {adapter_paths}")
+            continue
         else:
+            adapter_path = adapter_paths
+
+        if model_name == "Baseline":
+            print(f"⏳ [GPU {args.rank}] Baseline (어댑터 없음) 로드 완료")
             model = base_model
+        else:
+            print(f"🔄 [GPU {args.rank}] 어댑터 장착 중: {model_name}")
+            model = PeftModel.from_pretrained(base_model, adapter_path)
             
         model.eval()
         
-        # 각 모델별로 Simple과 Detailed 프롬프트를 연속해서 테스트
         for prompt_mode in PROMPT_MODES:
-            df_results = generate_responses(model, processor, test_dataset, model_name, prompt_mode)
+            df_results = generate_responses(model, processor, test_dataset, model_name, prompt_mode, device, args.rank)
             
-            # DataFrame 병합 (기존에 존재하는 image_id 기준)
-            final_df = pd.merge(final_df, df_results, on="image_id", how="left")
-            
-            # 중간중간 안전하게 CSV 덮어쓰기 저장
-            final_df.to_csv(OUTPUT_CSV_PATH, index=False, encoding='utf-8-sig')
+            # 🌟 에러 방어: 병합 시 KeyError 방지
+            if not df_results.empty:
+                final_df = pd.merge(final_df, df_results, on="image_id", how="left")
+            else:
+                # 결과가 없으면 빈 컬럼이라도 채워줍니다.
+                col_name = f"{model_name}_{prompt_mode}_Response" if prompt_mode == "Simple" else f"{model_name}_Detailed_JSON"
+                final_df[col_name] = None
+
+            final_df.to_csv(TEMP_CSV_PATH, index=False, encoding='utf-8-sig')
         
-        # 한 모델의 평가(2가지 모드)가 끝나면 메모리 완벽 정리
-        del model
-        if adapter_path: 
-            del base_model
+        if model_name != "Baseline":
+            print(f"🗑️ [GPU {args.rank}] 어댑터 해제: {model_name}")
+            model.unload() 
+            del model
             
         gc.collect()
         torch.cuda.empty_cache()
 
-    print(f"\n🎉 8-way Ablation 추론 완벽 종료! 결과가 다음 경로에 저장되었습니다.")
-    print(f"📁 결과물 경로: {OUTPUT_CSV_PATH}")
+    print(f"\n✅ GPU {args.rank} 작업 완료. 임시 결과 저장: {TEMP_CSV_PATH}")
 
 if __name__ == "__main__":
     main()
