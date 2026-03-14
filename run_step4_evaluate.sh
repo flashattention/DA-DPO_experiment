@@ -54,7 +54,8 @@ echo "=================================================="
 echo "🎯 [$(date)] 모든 GPU 작업 완료! 결과물을 병합합니다."
 echo "=================================================="
 
-# 임시 분할 저장된 CSV 파일들을 하나로 병합하는 파이썬 스크립트 실행
+# ... 기존 쉘 스크립트 윗부분 ...
+
 python -c "
 import pandas as pd, glob, os
 
@@ -62,16 +63,19 @@ exp_dir = '${EXP_DIR}'
 files = glob.glob(f'{exp_dir}/eval/temp_res_gpu_*.csv')
 
 if not files:
-    print('❌ [오류] 병합할 결과 파일이 없습니다. 파이썬 에러 로그를 확인하세요.')
+    print('❌ [오류] 병합할 결과 파일이 없습니다.')
     exit(1)
 
-print(f'✅ 찾은 임시 파일들: {files}')
-df = pd.concat([pd.read_csv(f) for f in files], ignore_index=True)
-
 out_path = f'{exp_dir}/eval/evaluation_results_4way.csv'
-df.to_csv(out_path, index=False, encoding='utf-8-sig')
 
-# 병합 완료 후 임시 파일 삭제
+for i, f in enumerate(files):
+    print(f'Merging {f}...')
+    df = pd.read_csv(f)
+    if i == 0:
+        df.to_csv(out_path, index=False, encoding='utf-8-sig')
+    else:
+        df.to_csv(out_path, mode='a', header=False, index=False, encoding='utf-8-sig')
+
 for f in files: 
     os.remove(f)
 

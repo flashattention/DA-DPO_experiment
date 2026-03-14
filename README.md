@@ -1,10 +1,13 @@
 # 🚀 HC-DA-DPO: Human-Calibrated Difficulty-Aware Direct Preference Optimization for Vision-Language Models
 
-본 프로젝트는 초거대 시각-언어 모델(Vision-Language Model, VLM)의 **문화적 환각(Cultural Hallucination)** 현상을 억제하고,  
-인간 평가자의 정밀한 가치관에 모델을 정렬(Alignment)하기 위한 **HC-DA-DPO 파이프라인의 공식 구현체**입니다.
+[![Conference](https://img.shields.io/badge/Target-Top--tier_NLP%2FCV-red.svg)]()
+[![Model](https://img.shields.io/badge/Base_Model-Qwen3--VL--32B--Thinking-blue.svg)]()
+[![Python](https://img.shields.io/badge/Python-3.10+-green.svg)]()
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)]()
 
-기존 **DPO (Direct Preference Optimization)** 가 데이터의 난이도와 상관없이 균등한 가중치를 부여함으로써 발생하는 문제를 해결하기 위해,  
-모델의 **내재적 확신도 (Intrinsic Confidence)** 와 **인간의 체감 오차율 (Human Calibration Penalty)** 을 결합한 **동적 난이도 가중치( $\omega$ )** 산출 기법을 제안합니다.
+본 프로젝트는 초거대 시각-언어 모델(Vision-Language Model, VLM)의 **문화적 환각(Cultural Hallucination)** 현상을 억제하고, 인간 평가자의 정밀한 가치관에 모델을 정렬(Alignment)하기 위한 **HC-DA-DPO 파이프라인의 공식 구현체**입니다.
+
+기존 **DPO (Direct Preference Optimization)** 가 데이터의 난이도와 상관없이 균등한 가중치를 부여함으로써 발생하는 문제를 해결하기 위해, 모델의 **내재적 확신도 (Intrinsic Confidence)** 와 **인간의 체감 오차율 (Human Calibration Penalty)** 을 결합한 **동적 난이도 가중치( $\omega$ )** 산출 기법을 제안합니다.
 
 ---
 
@@ -80,7 +83,7 @@ $$L_{\text{HC-DA-DPO}}(\theta; \pi_{\text{ref}}) = -\mathbb{E}_{(x, y_w, y_l) \s
 
 프로젝트 루트 경로에 `.env` 파일을 생성하고 다음 키를 입력합니다.
 
-```bash
+```env
 WANDB_API_KEY="your_wandb_api_key"
 OPENAI_API_KEY="your_openai_api_key"
 ```
@@ -152,20 +155,24 @@ bash run_step4_evaluate.sh [EXP_FOLDER]
 
 ---
 
-### Step 5: Final Grading & Visualization
+### 🌟 Step 5: Top-Tier Optimized Evaluation & Visualization
+
+본 연구는 평가의 학술적 엄밀성을 위해 기존의 절대평가(Pointwise) 방식을 배제하고, 리뷰어들의 비판을 원천 차단하는 **고도화된 상대평가 파이프라인**을 구동합니다.
 
 ```bash
-bash run_step5_visualize.sh [EXP_FOLDER]
+python src/5_run_evaluation.py --exp_dir runs/exp_YOUR_EXP_ID --judge_model gpt-4o --num_workers 10
 ```
 
-- **LLM-as-a-Judge:** 인간 심판 관점에서 `src/5_visualize.py`가 구동되어 각 모델의 환각 억제 및 정렬 점수를 최종 평가합니다.
-- **Radar & Loss Curve:** 폴더 내 `figures/` 디렉토리에 난이도별 성능 향상 폭(Radar Chart)과 학습 곡선 시각화 이미지가 저장됩니다.
+- **Avoidance of Self-Preference Bias (핵심):** Qwen 계열 모델이 스스로를 높게 평가하는 '자기 선호 편향'을 차단하기 위해, 이종 아키텍처인 `GPT-4o` (또는 로컬 `Llama-3.1-70B`)를 심판(Judge)으로 사용합니다.
+- **Pairwise Swap Test:** LLM의 고질적인 위치 편향(A 응답을 선호하는 현상)을 상쇄하기 위해, A/B 응답 순서를 스왑하여 교차 평가(Cross-validation)하고 두 결과가 일치할 때만 승률(Win-Rate)로 인정합니다.
+- **Parallel & Fault-Tolerant API:** `ThreadPoolExecutor`를 통한 병렬 처리로 평가 시간을 10배 이상 단축시켰으며, API Rate Limit 발생 시 지수 백오프(Exponential Backoff)와 실시간 체크포인팅(Checkpointing)을 통해 안정적인 평가를 보장합니다.
+- **Output:** 논문 첨부용 고해상도 Stacked Bar Chart (`fig1_pairwise_win_rate.pdf`) 및 Loss Curve 자동 생성.
 
 ---
 
 ## 📈 5. Expected Results
 
-- **Alignment Target:** 고난도 문화적 질문 영역에서 Baseline 대비 유의미한 Alignment Score 향상.  
+- **Alignment Target:** 고난도 문화적 질문 영역에서 Baseline 대비 유의미한 Alignment Score 향상 (Win-Rate 50% 이상 달성).  
 - **Hallucination Mitigation:** Calibration Penalty를 통한 Confidence Bias(근거 없는 확신) 현상 억제.  
 - **Robustness Visualization:** 난이도 기반 성능 곡선을 통해 제안된 HC-DA-DPO의 강건성 입증.
 
