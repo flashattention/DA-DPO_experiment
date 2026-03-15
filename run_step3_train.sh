@@ -42,7 +42,7 @@ mkdir -p "${EXP_DIR}"
 
 # 🚨 [수석의 Deep Fix 1] 공용 서버를 위한 자원/통신 방어벽
 # 4개의 GPU를 풀로 사용 (2번 스크립트에서 1장만 썼다면, 여기선 4장 모두 할당)
-export CUDA_VISIBLE_DEVICES="0,1,2,3" # 또는 비어있는 번호 "4,5,6,7" 등 상황에 맞게 수정
+export CUDA_VISIBLE_DEVICES="4,5,6,7" # 상황에 맞게 수정
 export OMP_NUM_THREADS=8
 export MKL_NUM_THREADS=8
 export TOKENIZERS_PARALLELISM=false

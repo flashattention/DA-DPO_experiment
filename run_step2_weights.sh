@@ -54,7 +54,7 @@ echo "📝 Log File: ${LOG_FILE}"
 echo "⚙️ Advanced Protections: ENABLED (VRAM Expandable, Tokenizer Safe)"
 echo "========================================================================"
 
-if python src/2_calculate_weights.py; then
+if python src/2_calc_dynamic_metrics.py; then
     echo "========================================================================"
     echo "✅ [SUCCESS] Weight calculation completed perfectly."
     echo "📅 End Time: $(date)"

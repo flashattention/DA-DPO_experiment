@@ -28,26 +28,47 @@ def resolve_image_path(image_path: str) -> str:
 # 🌟 [Fix 2] TRL 호환형 스마트 방어 Collator
 # ==========================================
 class DPOWeightCollator:
-    def __init__(self, base_collator):
+    def __init__(self, base_collator, processor):
         self.base_collator = base_collator
+        self.processor = processor # 🌟 Processor 주입 완료
 
     def __call__(self, features):
+        # 1. Forward 패스에 섞이지 않도록 가중치 안전하게 분리
         weights = [f.pop("sample_weight") for f in features if "sample_weight" in f]
         
-        # 🚨 TRL은 'prompt_input_ids', 'chosen_input_ids' 등을 생성함
-        # 동적 키워드 탐색으로 문자열(String) 패닉을 원천 차단
+        # 2. 🚨 TRL 문자열(String) 패닉 원천 차단
         if any(any(k.endswith("input_ids") for k in f.keys()) for f in features):
-            keys_to_remove = ["prompt", "chosen", "rejected", "image_path"]
+            keys_to_remove = ["prompt", "chosen", "rejected", "image_path", "resolved_path"]
             for f in features:
                 for k in keys_to_remove:
                     f.pop(k, None)
         
+        # 3. Base Collator 실행 (텍스트 토큰들 Padding 처리)
         batch = self.base_collator(features)
         
+        # 4. 🌟 [VLM 생명줄 복구 - Qwen-VL 아키텍처 맞춤형 수정]
+        if "pixel_values" not in batch and any("pixel_values" in f for f in features):
+            # Qwen-VL은 이미지마다 패치 개수가 다르므로 stack이 아닌 cat으로 연결해야 합니다.
+            # 또한 이미 Tensor로 변환되어 있을 경우를 대비해 안전하게 처리합니다.
+            batch["pixel_values"] = torch.cat([
+                f["pixel_values"].clone().detach() if isinstance(f["pixel_values"], torch.Tensor) 
+                else torch.tensor(f["pixel_values"]) 
+                for f in features if "pixel_values" in f
+            ], dim=0)
+            
+            # 3D Grid(THW) 정보도 동일하게 cat으로 연결합니다.
+            if any("image_grid_thw" in f for f in features):
+                batch["image_grid_thw"] = torch.cat([
+                    f["image_grid_thw"].clone().detach() if isinstance(f["image_grid_thw"], torch.Tensor) 
+                    else torch.tensor(f["image_grid_thw"]) 
+                    for f in features if "image_grid_thw" in f
+                ], dim=0)
+        
+        # 5. 가중치를 Bfloat16 텐서로 포장하여 batch에 탑재
         if weights:
             batch["sample_weight"] = torch.tensor(weights, dtype=torch.bfloat16)
+            
         return batch
-
 # ==========================================
 # Custom DPOTrainer (수석 엔지니어 보강판)
 # ==========================================
@@ -147,6 +168,7 @@ def main():
         processor.tokenizer.pad_token = processor.tokenizer.eos_token
     # DPO 손실 함수가 길이를 맞출 때, 우측 패딩을 강제하여 시퀀스 끝의 실제 EOS가 마스킹되지 않게 보호합니다.
     processor.tokenizer.padding_side = "right" 
+    processor.tokenizer.truncation_side = "left" # 🌟 프롬프트의 앞쪽을 자르고 정답부의 EOS는 무조건 보존
     
     model = AutoModelForImageTextToText.from_pretrained(
         MODEL_ID, 
@@ -154,7 +176,7 @@ def main():
         device_map={"": local_rank}, 
         trust_remote_code=True,
         attn_implementation="flash_attention_2",
-        torch_dtype=torch.bfloat16
+        dtype=torch.bfloat16
     )
 
     model.config.pad_token_id = processor.tokenizer.pad_token_id
@@ -166,7 +188,7 @@ def main():
     peft_config = LoraConfig(
         r=64,
         lora_alpha=128,
-        target_modules=r".*model\.layers.*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)",
+        target_modules=r".*(model\.layers|visual).*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)",
         lora_dropout=0.05,
         bias="none",
         task_type="CAUSAL_LM"
@@ -203,7 +225,7 @@ def main():
         peft_config=peft_config,
     )
     
-    trainer.data_collator = DPOWeightCollator(trainer.data_collator)
+    trainer.data_collator = DPOWeightCollator(trainer.data_collator, processor)
 
     trainer.train()
     trainer.save_model()
