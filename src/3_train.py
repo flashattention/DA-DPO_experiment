@@ -9,6 +9,7 @@ from transformers import (
 )
 from peft import LoraConfig, prepare_model_for_kbit_training
 from trl import DPOConfig, DPOTrainer
+from PIL import Image
 
 # ==========================================
 # [경로 설정]
@@ -99,9 +100,7 @@ class WeightedDPOTrainer(DPOTrainer):
         return losses, chosen_rewards, rejected_rewards
 
 def format_for_multimodal_dpo(example, weight_col, global_mean_weight):
-    file_uri = f"file://{example['resolved_path']}"
-    
-    prompt_msg = [{"role": "user", "content": [{"type": "image", "image": file_uri}, {"type": "text", "text": example["prompt"]}]}]
+    prompt_msg = [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": example["prompt"]}]}]
     chosen_msg = [{"role": "assistant", "content": [{"type": "text", "text": example["chosen"]}]}]
     rejected_msg = [{"role": "assistant", "content": [{"type": "text", "text": example["rejected"]}]}]
     
@@ -111,6 +110,7 @@ def format_for_multimodal_dpo(example, weight_col, global_mean_weight):
         "prompt": prompt_msg,
         "chosen": chosen_msg,
         "rejected": rejected_msg,
+        "images": [example['resolved_path']],  # 🌟 RAM 폭발 방지: 픽셀 대신 가벼운 경로(String)만 전달!
         "sample_weight": normalized_weight,
     }
 
@@ -151,6 +151,13 @@ def main():
         num_proc=4,
         desc="Formatting & Normalizing"
     )
+    
+    # ==========================================
+    # 🌟 [수석의 Deep Fix] 지연 로딩 타입 캐스팅 
+    # ==========================================
+    from datasets import Sequence, Image as DatasetsImage
+    dataset = dataset.cast_column("images", Sequence(DatasetsImage()))
+    # ==========================================
 
     bnb_config = BitsAndBytesConfig(
         load_in_4bit=True,
@@ -160,7 +167,12 @@ def main():
     )
     
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    processor = AutoProcessor.from_pretrained(MODEL_ID, trust_remote_code=True)
+    processor = AutoProcessor.from_pretrained(
+        MODEL_ID, # <--- 이 부분을 원래 쓰시던 변수명으로 변경!
+        trust_remote_code=True,
+        min_pixels=256 * 28 * 28,
+        max_pixels=1024 * 28 * 28
+    )
     
     # 🚨 [Fix 3] DPO EOS 마스킹 붕괴 및 Runaway Generation 방어
     if processor.tokenizer.pad_token_id is None:
@@ -211,7 +223,6 @@ def main():
         ddp_find_unused_parameters=False,   
         beta=0.1,
         max_length=4096,
-        max_prompt_length=3072,
         dataloader_num_workers=4,           
         report_to="wandb",                  
         run_name=args.run_name              

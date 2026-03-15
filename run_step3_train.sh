@@ -53,10 +53,17 @@ export TORCH_DISTRIBUTED_DEBUG=INFO
 export NCCL_DEBUG=WARN
 export NCCL_TIMEOUT=7200 # 타임아웃 2시간으로 연장 (초기 모델 로딩 지연 대비)
 
+# ==========================================
+# 🌟 7가지 전체 Ablation Configurations
+# ==========================================
 CONFIGS=(
     "weight_dpo output_dpo_model DPO_Baseline_${TIMESTAMP}"
     "weight_da_dpo output_da_dpo_model DADPO_${TIMESTAMP}"
+    "weight_hc_dpo output_hc_dpo_model HCDPO_${TIMESTAMP}"
     "weight_hc_da_dpo output_hc_da_dpo_model HCDADPO_${TIMESTAMP}"
+    "weight_hc_da_dpo_opt1 output_hc_da_dpo_opt1_model HCDADPO_OPT1_${TIMESTAMP}"
+    "weight_hc_da_dpo_opt3 output_hc_da_dpo_opt3_model HCDADPO_OPT3_${TIMESTAMP}"
+    "weight_hc_da_dpo_opt1_3 output_hc_da_dpo_opt1_3_model HCDADPO_OPT1_3_${TIMESTAMP}"
 )
 
 for config in "${CONFIGS[@]}"; do
@@ -86,6 +93,5 @@ for config in "${CONFIGS[@]}"; do
 done
 
 echo "=================================================="
-echo "🎯 [STAGE 1 완료] 모든 실험군(3종) 모델 학습 완료!"
-echo "👉 다음 단계(평가)를 위해 아래 명령어를 복사해서 실행하세요:"
-echo "bash run_
+echo "🎯 모든 실험군(7종) 모델 학습 완료!"
+echo "=================================================="
