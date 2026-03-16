@@ -221,7 +221,7 @@ def main():
         gradient_checkpointing_kwargs={"use_reentrant": False}, 
         remove_unused_columns=False,
         ddp_find_unused_parameters=False,   
-        beta=0.4,
+        beta=0.8,
         max_length=4096,
         dataloader_num_workers=4,           
         report_to="wandb",                  
