@@ -213,7 +213,7 @@ def main():
         optim="paged_adamw_32bit",
         learning_rate=1e-6,
         lr_scheduler_type="cosine",
-        num_train_epochs=2,
+        num_train_epochs=1,
         logging_steps=5,
         save_strategy="epoch",
         bf16=True,
