@@ -17,7 +17,7 @@ export MKL_NUM_THREADS=8
 export TOKENIZERS_PARALLELISM=false
 
 # 4. GPU 하드웨어 격리
-export CUDA_VISIBLE_DEVICES="4,5,6,7"
+export CUDA_VISIBLE_DEVICES="6,7"
 
 WORK_DIR=$(pwd)
 LOG_DIR="${WORK_DIR}/logs"

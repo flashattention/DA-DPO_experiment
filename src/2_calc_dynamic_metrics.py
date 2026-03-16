@@ -13,7 +13,7 @@ from transformers import AutoProcessor, AutoModelForImageTextToText
 # ==========================================
 MODEL_ID = "Qwen/Qwen3-VL-32B-Thinking"
 ALPHA = 1.0  # 🌟 기존 2.0에서 1.0으로 변경 (가중치 포화 방지 및 변별력 확보)
-BETA = 1.5
+BETA = 0.8
 LENGTH_PENALTY_ALPHA = 0.8
 
 # 경로 설정은 기존 로직 유지

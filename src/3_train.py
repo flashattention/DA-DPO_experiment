@@ -211,11 +211,18 @@ def main():
         per_device_train_batch_size=1, 
         gradient_accumulation_steps=16,
         optim="paged_adamw_32bit",
-        learning_rate=1e-6,
+        learning_rate=5e-7,
         lr_scheduler_type="cosine",
+        
+        # 🌟 1. Warmup 추가 (급발진 방어)
+        warmup_ratio=0.1,  # 전체 훈련 스텝의 10% 동안 학습률을 서서히 끌어올림
         num_train_epochs=1,
         logging_steps=5,
-        save_strategy="epoch",
+        
+        # 🌟 2. 조기 저장본 확보 (과적합 대비용 생명줄)
+        save_strategy="steps",  # 기존 "epoch"에서 변경 (에폭 끝날 때까지 기다리지 않음)
+        save_steps=15,          # 15스텝마다 모델을 저장 (황금 밸런스 지점 캡처)
+        
         bf16=True,
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False}, 
