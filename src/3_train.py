@@ -198,8 +198,8 @@ def main():
     model.enable_input_require_grads()
 
     peft_config = LoraConfig(
-        r=64,
-        lora_alpha=128,
+        r=16,
+        lora_alpha=32,
         target_modules=r".*(model\.layers|visual).*\.(q_proj|k_proj|v_proj|o_proj|gate_proj|up_proj|down_proj)",
         lora_dropout=0.05,
         bias="none",
@@ -211,7 +211,7 @@ def main():
         per_device_train_batch_size=1, 
         gradient_accumulation_steps=16,
         optim="paged_adamw_32bit",
-        learning_rate=5e-6,
+        learning_rate=1e-6,
         lr_scheduler_type="cosine",
         num_train_epochs=2,
         logging_steps=5,
@@ -221,7 +221,7 @@ def main():
         gradient_checkpointing_kwargs={"use_reentrant": False}, 
         remove_unused_columns=False,
         ddp_find_unused_parameters=False,   
-        beta=0.1,
+        beta=0.4,
         max_length=4096,
         dataloader_num_workers=4,           
         report_to="wandb",                  
